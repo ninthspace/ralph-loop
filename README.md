@@ -1,6 +1,79 @@
-# Ralph Loop Plugin
+# Ralph Loop Plugin (ninthspace fork)
 
 Implementation of the Ralph Wiggum technique for iterative, self-referential AI development loops in Claude Code.
+
+---
+
+## About this fork
+
+This is a fork of [`anthropics/claude-plugins-public/plugins/ralph-loop`](https://github.com/anthropics/claude-plugins-public/tree/main/plugins/ralph-loop),
+Apache-2.0, © Anthropic. The first commit in this repository is the upstream plugin
+unmodified, so every change here is visible as a diff against it.
+
+### Fail-closed extraction
+
+**One behavioural change: the stop hook no longer deletes the loop's state file when it
+cannot read the transcript.**
+
+`.claude/ralph-loop.local.md` *is* the loop — the Stop hook reads it to decide whether to
+block session exit and feed the prompt back. Delete it and the loop stops. Upstream
+removes it and exits 0 on three transcript-reading failures:
+
+| Situation | Upstream | This fork |
+|---|---|---|
+| Turn ends on a tool call (no text block) | continues | continues |
+| Transcript file not found | **deletes the loop** | continues |
+| No assistant records match the grep | **deletes the loop** | continues |
+| `jq` cannot parse the records | **deletes the loop** | continues |
+| Completion promise matched | ends the loop | ends the loop |
+| `max_iterations` reached | ends the loop | ends the loop |
+
+The reasoning is upstream's own. Its comment on the no-text-blocks case reads: *"empty
+text means no `<promise>` tag, so the loop simply continues."* That holds for every other
+way of failing to read the text — the extracted output feeds exactly one decision, whether
+the promise was emitted, so failing to read it means *no promise this iteration*, not *the
+loop is over*.
+
+The costs are asymmetric. Continuing when it should have stopped wastes one iteration and
+the promise is caught on the next pass. Stopping when it should have continued ends the
+run silently: exit 0, no promise, no state file — indistinguishable from a completed run
+for anyone reading the session afterwards. An unattended loop that dies this way looks
+exactly like one that succeeded.
+
+The `grep '"role":"assistant"'` case is the one worth singling out. It is an undeclared
+dependency on Claude Code's JSONL key order and spacing. `tests/test-fail-closed.sh`
+includes a transcript that is valid JSON with a single added space — `"role": "assistant"`
+— and upstream deletes the loop on it. If that serialisation ever changes, every loop on
+every machine ends silently and at once.
+
+### Deliberately unchanged
+
+Three deletions remain, all for a state file that is itself unusable: a non-numeric
+`iteration`, a non-numeric `max_iterations`, and a body with no prompt text. Those are a
+different class from a transcript that cannot be read, and are left as upstream has them.
+
+### Verifying
+
+```sh
+bash tests/test-fail-closed.sh
+```
+
+10 assertions. Six require the loop to survive an unreadable transcript; two require it to
+still end on a matched promise and on the iteration cap — without those, a hook that did
+nothing at all would pass; two require the hook to actually block the exit and advance
+`iteration`. Run against upstream's hook the same suite fails 4 of 10.
+
+### Installing
+
+```
+/plugin marketplace add ninthspace/ralph-loop
+/plugin install ralph-loop@ninthspace-ralph
+```
+
+Enable only one ralph plugin at a time. Two registered Stop hooks both fire on the same
+session, and the state file only has to be deleted by one of them for the loop to die.
+
+---
 
 ## What is Ralph Loop?
 

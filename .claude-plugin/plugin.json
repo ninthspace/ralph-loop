@@ -1,9 +1,10 @@
 {
   "name": "ralph-loop",
-  "version": "1.0.0",
-  "description": "Continuous self-referential AI loops for interactive iterative development, implementing the Ralph Wiggum technique. Run Claude in a while-true loop with the same prompt until task completion.",
+  "version": "1.1.0",
+  "description": "Continuous self-referential AI loops for interactive iterative development, implementing the Ralph Wiggum technique. Run Claude in a while-true loop with the same prompt until task completion. Fork of the Anthropic plugin with fail-closed extraction handling.",
   "author": {
     "name": "Anthropic",
     "email": "support@anthropic.com"
-  }
+  },
+  "homepage": "https://github.com/ninthspace/ralph-loop"
 }

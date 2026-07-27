@@ -67,62 +67,61 @@ fi
 # Get transcript path from hook input
 TRANSCRIPT_PATH=$(echo "$HOOK_INPUT" | jq -r '.transcript_path')
 
+# CHANGED FROM UPSTREAM (ninthspace fork): the three branches below no longer delete the
+# state file. See "Fail-closed extraction" in README.md.
+#
+# LAST_OUTPUT feeds exactly one decision: whether the completion promise was emitted. So
+# any failure to read it means "no promise this iteration" -- which is what an empty
+# string already encodes -- and not "the loop is over". Deleting the state file here ends
+# the run silently: exit 0, no promise, no state file, which is byte-for-byte what a
+# successful completion looks like to anyone reading the session afterwards.
+#
+# The costs are asymmetric. Continuing when we should have stopped costs one iteration,
+# and the promise is detected on the next pass. Stopping when we should have continued
+# costs the entire run, invisibly. Upstream already applies this reasoning to the
+# "no text blocks" case (see the `last // ""` comment below); this fork applies it to the
+# remaining extraction failures.
+#
+# The `grep '"role":"assistant"'` below is the one worth noticing: it is an undeclared
+# dependency on Claude Code's JSONL key order and spacing. If that serialisation ever
+# changes, the grep matches nothing on every machine at once -- so this branch in
+# particular must not be able to delete anything.
+LAST_OUTPUT=""
+EXTRACT_NOTE=""
+
 if [[ ! -f "$TRANSCRIPT_PATH" ]]; then
-  echo "⚠️  Ralph loop: Transcript file not found" >&2
-  echo "   Expected: $TRANSCRIPT_PATH" >&2
-  echo "   This is unusual and may indicate a Claude Code internal issue." >&2
-  echo "   Ralph loop is stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
+  EXTRACT_NOTE="transcript file not found at $TRANSCRIPT_PATH"
+else
+  # Read last assistant message from transcript (JSONL format - one JSON per line)
+  LAST_LINES=$(grep '"role":"assistant"' "$TRANSCRIPT_PATH" | tail -n 100) || LAST_LINES=""
+
+  if [[ -z "$LAST_LINES" ]]; then
+    EXTRACT_NOTE="no assistant messages found in $TRANSCRIPT_PATH"
+  else
+    # Parse the recent lines and pull out the final text block.
+    # `last // ""` yields empty string when no text blocks exist (e.g. a turn
+    # that is all tool calls). That's fine: empty text means no <promise> tag,
+    # so the loop simply continues.
+    # (Briefly disable errexit so a jq failure can be caught by the $? check.)
+    set +e
+    LAST_OUTPUT=$(echo "$LAST_LINES" | jq -rs '
+      map(.message.content[]? | select(.type == "text") | .text) | last // ""
+    ' 2>&1)
+    JQ_EXIT=$?
+    set -e
+
+    if [[ $JQ_EXIT -ne 0 ]]; then
+      EXTRACT_NOTE="could not parse assistant message JSON: $LAST_OUTPUT"
+      LAST_OUTPUT=""
+    fi
+  fi
 fi
 
-# Read last assistant message from transcript (JSONL format - one JSON per line)
-# First check if there are any assistant messages
-if ! grep -q '"role":"assistant"' "$TRANSCRIPT_PATH"; then
-  echo "⚠️  Ralph loop: No assistant messages found in transcript" >&2
-  echo "   Transcript: $TRANSCRIPT_PATH" >&2
-  echo "   This is unusual and may indicate a transcript format issue" >&2
-  echo "   Ralph loop is stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
-fi
-
-# Extract the most recent assistant text block.
-#
-# Claude Code writes each content block (text/tool_use/thinking) as its own
-# JSONL line, all with role=assistant. So slurp the last N assistant lines,
-# flatten to text blocks only, and take the last one.
-#
-# Capped at the last 100 assistant lines to keep jq's slurp input bounded
-# for long-running sessions.
-LAST_LINES=$(grep '"role":"assistant"' "$TRANSCRIPT_PATH" | tail -n 100)
-if [[ -z "$LAST_LINES" ]]; then
-  echo "⚠️  Ralph loop: Failed to extract assistant messages" >&2
-  echo "   Ralph loop is stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
-fi
-
-# Parse the recent lines and pull out the final text block.
-# `last // ""` yields empty string when no text blocks exist (e.g. a turn
-# that is all tool calls). That's fine: empty text means no <promise> tag,
-# so the loop simply continues.
-# (Briefly disable errexit so a jq failure can be caught by the $? check.)
-set +e
-LAST_OUTPUT=$(echo "$LAST_LINES" | jq -rs '
-  map(.message.content[]? | select(.type == "text") | .text) | last // ""
-' 2>&1)
-JQ_EXIT=$?
-set -e
-
-# Check if jq succeeded
-if [[ $JQ_EXIT -ne 0 ]]; then
-  echo "⚠️  Ralph loop: Failed to parse assistant message JSON" >&2
-  echo "   Error: $LAST_OUTPUT" >&2
-  echo "   This may indicate a transcript format issue." >&2
-  echo "   Ralph loop is stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
+if [[ -n "$EXTRACT_NOTE" ]]; then
+  echo "⚠️  Ralph loop: $EXTRACT_NOTE" >&2
+  echo "   The completion promise cannot be checked this iteration." >&2
+  echo "   Continuing the loop -- the state file is left in place. Stop it with" >&2
+  echo "   /cancel-ralph, or by deleting $RALPH_STATE_FILE." >&2
 fi
 
 # Check for completion promise (only if set)
