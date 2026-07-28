@@ -10,10 +10,22 @@ This is a fork of [`anthropics/claude-plugins-public/plugins/ralph-loop`](https:
 Apache-2.0, © Anthropic. The first commit in this repository is the upstream plugin
 unmodified, so every change here is visible as a diff against it.
 
+Three behavioural changes, all in `hooks/stop-hook.sh`, each with its own suite:
+
+| | Change | Landed |
+|---|---|---|
+| 1 | **Fail-closed extraction** — an unreadable transcript no longer ends the loop | 1.1.0 |
+| 2 | **A reminder is not an emission** — the hook's own output is no longer mistakable for the model's completion promise | 1.2.0 |
+| 3 | **The `active` field means something** — `active: false` pauses a loop without destroying it | 1.2.0 |
+
+Everything else — the commands, the setup script, the prompt format, the state file schema —
+is upstream's and is left alone. **1.2.0 is the version to install**: it is the first that
+has all three, and `cpm:ralph` documents its behaviour against it.
+
 ### Fail-closed extraction
 
-**One behavioural change: the stop hook no longer deletes the loop's state file when it
-cannot read the transcript.**
+**The stop hook no longer deletes the loop's state file when it cannot read the
+transcript.**
 
 `.claude/ralph-loop.local.md` *is* the loop — the Stop hook reads it to decide whether to
 block session exit and feed the prompt back. Delete it and the loop stops. Upstream
@@ -52,16 +64,99 @@ Three deletions remain, all for a state file that is itself unusable: a non-nume
 `iteration`, a non-numeric `max_iterations`, and a body with no prompt text. Those are a
 different class from a transcript that cannot be read, and are left as upstream has them.
 
+### A reminder is not an emission
+
+**Second change: the stop hook no longer prints the completion promise inside promise
+tags.**
+
+The loop ends when the model wraps its promise in `<promise>` tags, which makes the tagged
+pattern the natural thing to grep a run for. Upstream puts that literal pattern into the
+per-iteration reminder, so on a 24-iteration run a grep for the emission returns 24 hits
+from the hook and none from the model until the last one. The hook is *instructing*, not
+*emitting* — but a transcript does not record the difference, so an observer cannot tell a
+loop that finished from one that was told how to finish, and neither can a script watching
+the run.
+
+The reminder now names the promise text and the tag separately:
+
+```
+🔄 Ralph iteration 8 | To stop, wrap this exact statement in promise tags: "SPEC_DELIVERED"
+(ONLY when it is TRUE - do not lie to exit!)
+```
+
+The model still gets the exact string, the tag name, and the warning; they are simply not
+adjacent. The detection message changed for the same reason, and gained a marker emitted
+nowhere else:
+
+```
+✅ Ralph loop: RALPH_PROMISE_MATCHED at iteration 24 — "SPEC_DELIVERED"
+```
+
+So a run now answers two questions unambiguously:
+
+| Question | Grep for |
+|---|---|
+| Did the model emit its promise? | `<promise>` — every occurrence is the model's |
+| Did the loop complete? | `RALPH_PROMISE_MATCHED` |
+
+`scripts/setup-ralph-loop.sh` still shows the tagged form once, when the loop starts, in
+the block that teaches the format. That is deliberate — the model has to learn the exact
+shape somewhere — and it is one occurrence per run rather than one per iteration.
+
+### The `active` field means something
+
+**Third change: `active: false` pauses the loop.**
+
+Upstream writes `active: true` into every state file and never reads it; a loop is active
+precisely while its file exists. A field named `active` that governs nothing is worse than
+no field at all, because the obvious way to pause a run is to set it false — and doing that
+has no effect whatsoever, silently. The only working stop was deleting the file, which
+discards the prompt and the iteration count along with it.
+
+The hook now reads it. Anything other than `true` allows the session to exit, and the state
+file is left **completely untouched** — same iteration, same prompt, same field:
+
+```sh
+# pause
+sed -i '' 's/^active: true/active: false/' .claude/ralph-loop.local.md
+
+# resume, at the same iteration
+sed -i '' 's/^active: false/active: true/' .claude/ralph-loop.local.md
+```
+
+A state file with no `active:` line at all runs, which is what every file written before
+this change relies on — the same compatibility rule the `session_id` check already uses.
+
+`/cancel-ralph` is unchanged and still deletes the file. Pause and cancel are now different
+operations, which they were not before.
+
 ### Verifying
 
 ```sh
-bash tests/test-fail-closed.sh
+bash tests/test-fail-closed.sh      # 10 assertions
+bash tests/test-active-field.sh     # 11 assertions
+bash tests/test-promise-markers.sh  # 12 assertions
 ```
 
-10 assertions. Six require the loop to survive an unreadable transcript; two require it to
-still end on a matched promise and on the iteration cap — without those, a hook that did
-nothing at all would pass; two require the hook to actually block the exit and advance
-`iteration`. Run against upstream's hook the same suite fails 4 of 10.
+**`test-fail-closed.sh`** — six require the loop to survive an unreadable transcript; two
+require it to still end on a matched promise and on the iteration cap (without those, a
+hook that did nothing at all would pass); two require the hook to actually block the exit
+and advance `iteration`. Run against upstream's hook it fails 4 of 10.
+
+**`test-active-field.sh`** — that the field is read, that pausing leaves the file
+byte-for-byte unchanged, and that resuming continues from the same iteration. Its controls
+are the *active* cases: "allows the exit when paused" is also satisfied by a hook that has
+stopped blocking anything at all.
+
+**`test-promise-markers.sh`** — that no hook output carries the tagged pattern, *and* that
+the reminder still states the promise text, the tag name and the do-not-lie warning —
+without that second half, deleting the reminder outright would pass. It ends on a whole-run
+check: three ongoing iterations plus a matched one must yield zero tagged patterns and
+exactly one completion marker.
+
+All three fork behaviours were verified by reverting the change and confirming the relevant
+assertions fail — including the destructive variant of the pause, which the byte-for-byte
+assertions exist to catch.
 
 ### Installing
 
@@ -69,6 +164,11 @@ nothing at all would pass; two require the hook to actually block the exit and a
 /plugin marketplace add ninthspace/ralph-loop
 /plugin install ralph-loop@ninthspace-ralph
 ```
+
+Check what you got with `/plugin` — `ralph-loop@ninthspace-ralph` should read **1.2.0** or
+later. Below that, some of the three changes above are simply not present, and the ones that
+are missing fail quietly: a loop that ends silently, a transcript whose promise greps are all
+the hook's own, a pause that does nothing.
 
 Enable only one ralph plugin at a time. Two registered Stop hooks both fire on the same
 session, and the state file only has to be deleted by one of them for the loop to die.

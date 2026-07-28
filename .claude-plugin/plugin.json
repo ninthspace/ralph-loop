@@ -1,7 +1,7 @@
 {
   "name": "ralph-loop",
-  "version": "1.1.0",
-  "description": "Continuous self-referential AI loops for interactive iterative development, implementing the Ralph Wiggum technique. Run Claude in a while-true loop with the same prompt until task completion. Fork of the Anthropic plugin with fail-closed extraction handling.",
+  "version": "1.2.0",
+  "description": "Continuous self-referential AI loops for interactive iterative development, implementing the Ralph Wiggum technique. Run Claude in a while-true loop with the same prompt until task completion. Fork of the Anthropic plugin: fail-closed transcript extraction, a stop hook whose output is not mistakable for the model's own completion promise, and an `active` field that actually pauses the loop.",
   "author": {
     "name": "Anthropic",
     "email": "support@anthropic.com"

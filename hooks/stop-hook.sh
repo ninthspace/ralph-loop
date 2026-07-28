@@ -34,6 +34,26 @@ if [[ -n "$STATE_SESSION" ]] && [[ "$STATE_SESSION" != "$HOOK_SESSION" ]]; then
   exit 0
 fi
 
+# CHANGED FROM UPSTREAM (ninthspace fork): the `active:` field is now read.
+# See "The `active` field means something" in README.md.
+#
+# The setup script writes `active: true` and upstream never looks at it -- the loop is
+# "active" precisely while the file exists. A field named `active` that does nothing is
+# worse than no field: the obvious way to pause a loop is to set it false, and doing that
+# has no effect whatsoever, silently. The only working stop is deleting the file, which
+# discards the prompt and the iteration count with it.
+#
+# Reading it costs three lines and makes the name honest. Anything other than `true` is
+# treated as paused: the hook allows the exit and leaves the file completely alone, so
+# setting it back to `true` resumes the same loop at the same iteration.
+#
+# Absent field falls through as active, which is what every state file written before this
+# change relies on -- the same compatibility rule as `session_id` above.
+LOOP_ACTIVE=$(echo "$FRONTMATTER" | grep '^active:' | sed 's/active: *//' | tr -d '[:space:]' || true)
+if [[ -n "$LOOP_ACTIVE" ]] && [[ "$LOOP_ACTIVE" != "true" ]]; then
+  exit 0
+fi
+
 # Validate numeric fields before arithmetic operations
 if [[ ! "$ITERATION" =~ ^[0-9]+$ ]]; then
   echo "⚠️  Ralph loop: State file corrupted" >&2
@@ -134,7 +154,10 @@ if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
   # Use = for literal string comparison (not pattern matching)
   # == in [[ ]] does glob pattern matching which breaks with *, ?, [ characters
   if [[ -n "$PROMISE_TEXT" ]] && [[ "$PROMISE_TEXT" = "$COMPLETION_PROMISE" ]]; then
-    echo "✅ Ralph loop: Detected <promise>$COMPLETION_PROMISE</promise>"
+    # RALPH_PROMISE_MATCHED is the marker to grep a run for. It is emitted here and
+    # nowhere else -- not by the setup script, not by the per-iteration reminder -- so it
+    # answers "did this loop actually complete?" without the ambiguity the tags carry.
+    echo "✅ Ralph loop: RALPH_PROMISE_MATCHED at iteration $ITERATION — \"$COMPLETION_PROMISE\""
     rm "$RALPH_STATE_FILE"
     exit 0
   fi
@@ -168,9 +191,21 @@ TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
 sed "s/^iteration: .*/iteration: $NEXT_ITERATION/" "$RALPH_STATE_FILE" > "$TEMP_FILE"
 mv "$TEMP_FILE" "$RALPH_STATE_FILE"
 
-# Build system message with iteration count and completion promise info
+# Build system message with iteration count and completion promise info.
+#
+# CHANGED FROM UPSTREAM (ninthspace fork): this reminder no longer spells the promise
+# inside its own tags. See "A reminder is not an emission" in README.md.
+#
+# Upstream emitted the literal promise-in-tags here, once per iteration. A model reads
+# that as an instruction, but a transcript does not record the difference -- so grepping a
+# run for the emission matches the hook's own reminder every iteration, and an observer
+# cannot tell a loop that finished from one that was merely told how to finish. On a
+# 24-iteration run that is 24 false positives and no true one.
+#
+# The model still gets the exact text and the tag name. They are simply not adjacent, so
+# the emission pattern belongs to the model alone.
 if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
-  SYSTEM_MSG="🔄 Ralph iteration $NEXT_ITERATION | To stop: output <promise>$COMPLETION_PROMISE</promise> (ONLY when statement is TRUE - do not lie to exit!)"
+  SYSTEM_MSG="🔄 Ralph iteration $NEXT_ITERATION | To stop, wrap this exact statement in promise tags: \"$COMPLETION_PROMISE\" (ONLY when it is TRUE - do not lie to exit!)"
 else
   SYSTEM_MSG="🔄 Ralph iteration $NEXT_ITERATION | No completion promise set - loop runs infinitely"
 fi
