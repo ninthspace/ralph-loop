@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "ninthspace-ralph",
-  "description": "Fork of Anthropic's ralph-loop plugin: a loop that does not end silently, a hook whose output cannot be mistaken for the model's completion promise, and a working pause",
+  "description": "Fork of Anthropic's ralph-loop plugin: a loop that does not end silently, a hook whose output cannot be mistaken for the model's completion promise, and a working pause that announces itself",
   "owner": {
     "name": "ninthspace",
     "email": "chris@junctionbox.com"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "ralph-loop",
-      "description": "Interactive self-referential AI loops for iterative development. Claude works on the same task repeatedly, seeing its previous work, until completion. This fork keeps the loop's state file when it cannot read the transcript, never prints the completion promise inside its own tags, and honours `active: false` as a non-destructive pause.",
+      "description": "Interactive self-referential AI loops for iterative development. Claude works on the same task repeatedly, seeing its previous work, until completion. This fork keeps the loop's state file when it cannot read the transcript, never prints the completion promise inside its own tags, honours `active: false` as a non-destructive pause, and says so when it pauses.",
       "author": {
         "name": "Anthropic",
         "email": "support@anthropic.com"

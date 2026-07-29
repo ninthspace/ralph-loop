@@ -127,6 +127,32 @@ OUT=$( cd "$D" && printf '{"transcript_path":"%s","session_id":""}' "$T/no-promi
 check "pausing does not report a completed promise" "quiet" \
   "$(echo "$OUT" | grep -q "RALPH_PROMISE_MATCHED" && echo claimed || echo quiet)"
 
+# --- but it does say it paused -------------------------------------------------------
+# The other two endings announce themselves; this one used to end the run in silence, which
+# reads in a transcript exactly like a crashed session. That was survivable while the field
+# was only a human kill switch -- the human who set it knew. It stopped being survivable
+# when an agent could set it mid-run and stop itself.
+
+check "pausing emits the RALPH_PAUSED marker" "marked" \
+  "$(echo "$OUT" | grep -q "RALPH_PAUSED" && echo marked || echo silent)"
+
+# The marker is worth having only if it carries where the run stopped -- "it paused" without
+# an iteration sends the reader back to the file the marker was supposed to save them opening.
+check "and names the iteration it paused at" "iteration: 7" \
+  "iteration: $(echo "$OUT" | sed -n 's/.*RALPH_PAUSED at iteration \([0-9]*\).*/\1/p')"
+
+# The control that makes the marker mean "paused" rather than "the hook ran". Without it,
+# a hook printing the line unconditionally would pass everything above.
+D=$(mktemp -d); state_file "$D" true
+ACTIVE_OUT=$( cd "$D" && printf '{"transcript_path":"%s","session_id":""}' "$T/no-promise.jsonl" | bash "$HOOK" 2>&1 )
+check "control: a running loop emits no pause marker" "quiet" \
+  "$(echo "$ACTIVE_OUT" | grep -q "RALPH_PAUSED" && echo marked || echo quiet)"
+
+# And the control that matters mechanically: the blocking path answers in JSON on stdout, so
+# a marker printed on the wrong side of the branch would corrupt the hook's own protocol.
+check "control: the running loop's stdout is still parseable JSON" "block" \
+  "$(echo "$ACTIVE_OUT" | jq -r '.decision // "unparseable"' 2>/dev/null || echo unparseable)"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]] || exit 1

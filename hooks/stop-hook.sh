@@ -49,8 +49,21 @@ fi
 #
 # Absent field falls through as active, which is what every state file written before this
 # change relies on -- the same compatibility rule as `session_id` above.
+#
+# The marker: this is the third way a run can end, and the only one that used to end it in
+# silence. `RALPH_PROMISE_MATCHED` and the iteration-cap notice both announce themselves, so
+# a transcript says why those runs stopped. A pause said nothing at all -- and a run that
+# ends with no output and no further iterations is byte-for-byte what a crashed session looks
+# like to whoever reads it afterwards. That was tolerable while the field was only a human
+# kill switch, since the human who set it knew what they had done. It is not tolerable now
+# that an agent can set it mid-run and stop itself, which is what `cpm:ralph` does.
+#
+# Named after `RALPH_PROMISE_MATCHED` and emitted in exactly one place, for the same reason:
+# so grepping a run for it answers a question rather than raising one.
 LOOP_ACTIVE=$(echo "$FRONTMATTER" | grep '^active:' | sed 's/active: *//' | tr -d '[:space:]' || true)
 if [[ -n "$LOOP_ACTIVE" ]] && [[ "$LOOP_ACTIVE" != "true" ]]; then
+  echo "⏸️  Ralph loop: RALPH_PAUSED at iteration $ITERATION — active is \"$LOOP_ACTIVE\", not true."
+  echo "   The state file is untouched. Set active: true to resume here, or /cancel-ralph to discard it."
   exit 0
 fi
 

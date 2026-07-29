@@ -17,10 +17,13 @@ Three behavioural changes, all in `hooks/stop-hook.sh`, each with its own suite:
 | 1 | **Fail-closed extraction** — an unreadable transcript no longer ends the loop | 1.1.0 |
 | 2 | **A reminder is not an emission** — the hook's own output is no longer mistakable for the model's completion promise | 1.2.0 |
 | 3 | **The `active` field means something** — `active: false` pauses a loop without destroying it | 1.2.0 |
+| 4 | **A pause says so** — the third way a run can end no longer ends it in silence | 1.2.1 |
 
 Everything else — the commands, the setup script, the prompt format, the state file schema —
 is upstream's and is left alone. **1.2.0 is the version to install**: it is the first that
-has all three, and `cpm:ralph` documents its behaviour against it.
+has all three of the behavioural changes, and `cpm:ralph` documents its behaviour against it.
+1.2.1 adds the pause marker, which nothing depends on — it makes a run readable afterwards
+rather than changing what a run does.
 
 ### Fail-closed extraction
 
@@ -130,11 +133,35 @@ this change relies on — the same compatibility rule the `session_id` check alr
 `/cancel-ralph` is unchanged and still deletes the file. Pause and cancel are now different
 operations, which they were not before.
 
+### A pause says so
+
+**Fourth change: the hook announces a pause, the way it already announces the other two
+endings.**
+
+A run can end three ways: the promise matched, the iteration cap was reached, or `active` is
+not `true`. The first two print a line saying which — `RALPH_PROMISE_MATCHED`, or the cap
+notice. The third printed nothing, so a transcript that ends on a pause is byte-for-byte
+what a crashed session looks like: no output, no further iterations, no explanation.
+
+That was tolerable while the field was only a human kill switch — whoever set it knew what
+they had done. It stopped being tolerable once an agent could set it mid-run and stop
+itself, which is what `cpm:ralph` does. The pause is now the only ending nobody can attribute
+after the fact, and it is the one most likely to be reached by something other than a person.
+
+```
+⏸️  Ralph loop: RALPH_PAUSED at iteration 12 — active is "false", not true.
+   The state file is untouched. Set active: true to resume here, or /cancel-ralph to discard it.
+```
+
+Emitted in exactly one place, like `RALPH_PROMISE_MATCHED`, so grepping a run for it answers
+a question rather than raising one. Nothing about *what the hook does* changed: the pause
+still allows the exit and still leaves the state file byte-for-byte alone.
+
 ### Verifying
 
 ```sh
 bash tests/test-fail-closed.sh      # 10 assertions
-bash tests/test-active-field.sh     # 11 assertions
+bash tests/test-active-field.sh     # 15 assertions
 bash tests/test-promise-markers.sh  # 12 assertions
 ```
 
@@ -146,7 +173,10 @@ and advance `iteration`. Run against upstream's hook it fails 4 of 10.
 **`test-active-field.sh`** — that the field is read, that pausing leaves the file
 byte-for-byte unchanged, and that resuming continues from the same iteration. Its controls
 are the *active* cases: "allows the exit when paused" is also satisfied by a hook that has
-stopped blocking anything at all.
+stopped blocking anything at all. Four cover the marker: that it is emitted, that it carries
+the iteration, that a *running* loop emits nothing (or the marker would mean "the hook ran"),
+and that the running loop's stdout is still parseable JSON — a line printed on the wrong side
+of the branch would corrupt the hook's own protocol rather than merely being noisy.
 
 **`test-promise-markers.sh`** — that no hook output carries the tagged pattern, *and* that
 the reminder still states the promise text, the tag name and the do-not-lie warning —
@@ -154,9 +184,10 @@ without that second half, deleting the reminder outright would pass. It ends on 
 check: three ongoing iterations plus a matched one must yield zero tagged patterns and
 exactly one completion marker.
 
-All three fork behaviours were verified by reverting the change and confirming the relevant
+All four fork behaviours were verified by reverting the change and confirming the relevant
 assertions fail — including the destructive variant of the pause, which the byte-for-byte
-assertions exist to catch.
+assertions exist to catch, and the marker printed unconditionally rather than on the pause
+branch, which fails seven assertions because it also breaks the blocking path's JSON.
 
 ### Installing
 
@@ -166,9 +197,9 @@ assertions exist to catch.
 ```
 
 Check what you got with `/plugin` — `ralph-loop@ninthspace-ralph` should read **1.2.0** or
-later. Below that, some of the three changes above are simply not present, and the ones that
-are missing fail quietly: a loop that ends silently, a transcript whose promise greps are all
-the hook's own, a pause that does nothing.
+later. Below that, some of the behavioural changes above are simply not present, and the ones
+that are missing fail quietly: a loop that ends silently, a transcript whose promise greps are
+all the hook's own, a pause that does nothing.
 
 Enable only one ralph plugin at a time. Two registered Stop hooks both fire on the same
 session, and the state file only has to be deleted by one of them for the loop to die.
